@@ -146,8 +146,11 @@ jobs:
       - name: PPG pulse detection vs BIDMC
         run: python dsp/validate_ppg.py
       - name: Streaming JS port vs the Python design
-        run: npm run validate:streaming
-        working-directory: server
+        # Python owns the dataset reader, so it writes the fixtures the JS suite
+        # consumes. They are gitignored, so CI must export them before scoring.
+        run: |
+          python dsp/export_fixture.py
+          npm run validate:streaming --prefix server
       - name: Firmware fixed-point notch vs the Python design
         run: python firmware/test/score_notch.py
       - name: SpO2 JS port vs the Python design
