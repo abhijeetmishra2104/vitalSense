@@ -78,19 +78,26 @@ static bool parse_args(int argc, char **argv)
         if (strcmp(a, "--no-prime") == 0) {
             prime = false;
         } else if (strcmp(a, "--device-id") == 0 && v) {
-            device_id = v; ++i;
+            device_id = v;
+            ++i;
         } else if (strcmp(a, "--frame-samples") == 0 && v) {
-            if (!parse_u32(v, &frame_samples)) return false; ++i;
+            if (!parse_u32(v, &frame_samples)) return false;
+            ++i;
         } else if (strcmp(a, "--lo-from") == 0 && v) {
-            if (!parse_u32(v, &lo_from)) return false; ++i;
+            if (!parse_u32(v, &lo_from)) return false;
+            ++i;
         } else if (strcmp(a, "--lo-to") == 0 && v) {
-            if (!parse_u32(v, &lo_to)) return false; ++i;
+            if (!parse_u32(v, &lo_to)) return false;
+            ++i;
         } else if (strcmp(a, "--outage-from") == 0 && v) {
-            if (!parse_u32(v, &outage_from)) return false; ++i;
+            if (!parse_u32(v, &outage_from)) return false;
+            ++i;
         } else if (strcmp(a, "--outage-to") == 0 && v) {
-            if (!parse_u32(v, &outage_to)) return false; ++i;
+            if (!parse_u32(v, &outage_to)) return false;
+            ++i;
         } else if (strcmp(a, "--buffer-seconds") == 0 && v) {
-            if (!parse_u32(v, &buffer_seconds)) return false; ++i;
+            if (!parse_u32(v, &buffer_seconds)) return false;
+            ++i;
         } else {
             fprintf(stderr, "unknown option: %s\n", a);
             return false;
