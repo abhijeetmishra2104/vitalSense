@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VitalSense Central Station</title>
+    <style>
+      /*
+       * Same palette and conventions as the bedside page (index.html): dark ground, the
+       * colours clinicians already read - green for ECG-derived rate, cyan for SpO2,
+       * yellow for temperature, red/amber for alarm priority.
+       *
+       * Three rules govern this page, and each is a safety rule (D-48):
+       *   1. beds sort by worst active alarm, not by bed number;
+       *   2. a missing measurement shows as "--", never as the last value;
+       *   3. a bed whose device disappears stays on screen, marked offline.
+       */
+      :root {
+        --bg: #0a0e13;
+        --panel: #141a22;
+        --line: #232c38;
+        --text: #e6edf3;
+        --muted: #8b98a8;
+        --ecg: #35d07f;
+        --spo2: #35c8e8;
+        --temp: #e8c135;
+        --alarm-high: #ff4d4f;
+        --alarm-medium: #ffa940;
+        --alarm-low: #8b98a8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        overflow: hidden;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+        flex-shrink: 0;
+      }
+      .brand { font-weight: 700; letter-spacing: 0.08em; }
+      .title { color: var(--muted); font-size: 12px; letter-spacing: 0.12em; }
+      .spacer { flex: 1; }
+      .pill {
+        padding: 3px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 12px;
+        text-decoration: none;
+      }
+      .pill.live { color: var(--ecg); border-color: var(--ecg); }
+      .pill.down { color: var(--alarm-high); border-color: var(--alarm-high); }
+
+      /* Ward-wide summary strip: how many beds, how many alarming, how many offline. */
+      #summary {
+        display: flex;
+        gap: 24px;
+        padding: 6px 16px;
+        border-bottom: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--muted);
+        flex-shrink: 0;
+      }
+      #summary b { color: var(--text); font-weight: 600; }
+      #summary .alarming b { color: var(--alarm-high); }
+      #summary .offline b { color: var(--muted); }
+
+      main {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+        gap: 12px;
+        align-content: start;
+      }
+      #empty {
+        grid-column: 1 / -1;
+        color: var(--muted);
+        padding: 48px 0;
+        text-align: center;
+      }
+
+      /* --- bed tile ------------------------------------------------------------- */
+      .bed {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .bed.high { border-color: var(--alarm-high); box-shadow: 0 0 0 1px var(--alarm-high) inset; }
+      .bed.medium { border-color: var(--alarm-medium); }
+      .bed.offline { opacity: 0.6; }
+      .bed.offline .numerics .value { color: var(--muted) !important; }
+
+      .bed-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+      .bed-id { font-weight: 700; letter-spacing: 0.08em; }
+      .bed-status {
+        font-size: 11px;
+        letter-spacing: 0.1em;
+        padding: 1px 8px;
+        border-radius: 3px;
+        border: 1px solid var(--line);
+        color: var(--muted);
+      }
+      .bed-status.online { color: var(--ecg); border-color: var(--ecg); }
+      .bed-status.stale { color: var(--alarm-medium); border-color: var(--alarm-medium); }
+      .bed-status.offline { color: var(--muted); background: rgba(139, 152, 168, 0.12); }
+      .bed-head .since { margin-left: auto; font-size: 11px; color: var(--muted); }
+
+      /* Alarm chips. High priority flashes, as on the bedside page; an acknowledged
+       * chip is dimmed and shows how long the silence has left - so the silence is
+       * visibly temporary rather than looking like the alarm went away (D-44). */
+      .chips { display: flex; flex-direction: column; }
+      .chip {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 5px 12px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.3);
+      }
+      .chip.high { background: var(--alarm-high); color: #fff; animation: flash 1s steps(1) infinite; }
+      .chip.medium { background: var(--alarm-medium); color: #1a1000; }
+      .chip.low { background: var(--bg); color: var(--alarm-low); border-bottom-color: var(--line); }
+      .chip.acked { animation: none; filter: saturate(0.35) brightness(0.7); }
+      .chip .msg { font-weight: 400; opacity: 0.9; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .chip .meta { font-weight: 400; opacity: 0.85; font-size: 11px; white-space: nowrap; }
+      .chip button {
+        font: inherit;
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 3px;
+        border: 1px solid currentColor;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+      }
+      .chip button:hover { background: rgba(255, 255, 255, 0.15); }
+      @keyframes flash { 50% { filter: brightness(0.65); } }
+      @media (prefers-reduced-motion: reduce) { .chip.high { animation: none; } }
+
+      .numerics {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        background: var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+      .numerics .tile { background: var(--panel); padding: 8px 12px; }
+      .tile .label { color: var(--muted); font-size: 10px; letter-spacing: 0.12em; }
+      .tile .value { font-size: 30px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+      .tile .unit { font-size: 11px; color: var(--muted); margin-left: 3px; }
+      .tile .sub { font-size: 10px; color: var(--muted); min-height: 14px; }
+      .tile.hr .value { color: var(--ecg); }
+      .tile.hr.abnormal .value { color: var(--alarm-medium); }
+      .tile.spo2 .value { color: var(--spo2); }
+      .tile.temp .value { color: var(--temp); }
+      .value.unknown { color: var(--muted) !important; }
+
+      /* Trends: five minutes of 1 Hz numerics. Gaps stay gaps (the line breaks) - a
+       * trend that draws through missing data invents a patient history. */
+      .trends { display: flex; flex-direction: column; }
+      .trend { position: relative; height: 58px; border-bottom: 1px solid var(--line); }
+      .trend:last-child { border-bottom: none; }
+      .trend canvas { display: block; width: 100%; height: 100%; }
+      .trend .tag {
+        position: absolute;
+        top: 4px;
+        left: 8px;
+        font-size: 10px;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+      }
+      .trend.hr .tag { color: var(--ecg); }
+      .trend.spo2 .tag { color: var(--spo2); }
+
+      .bed-foot {
+        display: flex;
+        gap: 14px;
+        padding: 4px 12px;
+        font-size: 10px;
+        color: var(--muted);
+        border-top: 1px solid var(--line);
+      }
+      .bed-foot .warn { color: var(--alarm-medium); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="brand">VITALSENSE</span>
+      <span class="title">CENTRAL STATION</span>
+      <span class="spacer"></span>
+      <a class="pill" href="/">bedside view →</a>
+      <span class="pill" id="conn">connecting…</span>
+    </header>
+
+    <div id="summary">
+      <span class="beds">beds <b id="n-beds">0</b></span>
+      <span class="alarming">alarming <b id="n-alarming">0</b></span>
+      <span class="offline">offline <b id="n-offline">0</b></span>
+      <span class="spacer"></span>
+      <span id="clock"></span>
+    </div>
+
+    <main id="ward">
+      <div id="empty">no beds yet — waiting for a device to connect to /ingest</div>
+    </main>
+
+    <template id="bed-template">
+      <section class="bed">
+        <div class="bed-head">
+          <span class="bed-id"></span>
+          <span class="bed-status"></span>
+          <span class="since"></span>
+        </div>
+        <div class="chips"></div>
+        <div class="numerics">
+          <div class="tile hr">
+            <div class="label">HR</div>
+            <div class="value unknown">--<span class="unit">bpm</span></div>
+            <div class="sub"></div>
+          </div>
+          <div class="tile spo2">
+            <div class="label">SpO₂</div>
+            <div class="value unknown">--<span class="unit">%</span></div>
+            <div class="sub"></div>
+          </div>
+          <div class="tile temp">
+            <div class="label">TEMP</div>
+            <div class="value unknown">--<span class="unit">°C</span></div>
+            <div class="sub"></div>
+          </div>
+        </div>
+        <div class="trends">
+          <div class="trend hr"><canvas></canvas><span class="tag">HR · 5 min</span></div>
+          <div class="trend spo2"><canvas></canvas><span class="tag">SpO₂ · 5 min</span></div>
+        </div>
+        <div class="bed-foot">
+          <span class="f-frames"></span>
+          <span class="f-dropped"></span>
+          <span class="f-quality"></span>
+        </div>
+      </section>
+    </template>
+
+    <script type="module">
+      /**
+       * Central-station client.
+       *
+       * Pure subscriber on /stream, the same feed the bedside page uses. Every bed's
+       * vitals frames are kept (the bedside page keeps only the selected one), trends
+       * are accumulated in the browser at 1 Hz, and the only message ever sent to the
+       * server is an acknowledgement - a viewer may silence an alarm that is sounding,
+       * never reconfigure what is measured.
+       */
+
+      const STALE_MS = 3000;          // no frames for this long => numerics withdrawn
+      const OFFLINE_MS = 8000;        // no frames for this long => the bed is offline
+      const FORGET_MS = 10 * 60_000;  // an offline bed leaves the screen after this (D-48)
+      const TREND_S = 300;            // five minutes of trend per bed
+      const SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
+      const ACK_BY = 'central';
+
+      const el = (id) => document.getElementById(id);
+      const ward = el('ward');
+      const template = el('bed-template');
+
+      /** @type {Map<string, Bed>} */
+      const beds = new Map();
+      let ws = null;
+
+      // --- trend buffer -------------------------------------------------------------
+      class Trend {
+        constructor(seconds) {
+          this.seconds = seconds;
+          this.values = new Float32Array(seconds).fill(NaN);
+          this.latest = -1; // epoch second of the newest sample
+        }
+        /** Record a value for an epoch second. Seconds with no sample stay NaN. */
+        put(second, value) {
+          if (this.latest >= 0 && second > this.latest + 1) {
+            const gapEnd = Math.min(second, this.latest + 1 + this.seconds);
+            for (let s = this.latest + 1; s < gapEnd; s += 1) this.values[s % this.seconds] = NaN;
+          }
+          this.values[second % this.seconds] = value === null || value === undefined ? NaN : value;
+          this.latest = Math.max(this.latest, second);
+        }
+        /** Value at an epoch second, or NaN when outside the window or missing. */
+        at(second) {
+          if (this.latest < 0 || second > this.latest || second <= this.latest - this.seconds) return NaN;
+          return this.values[second % this.seconds];
+        }
+      }
+
+      // --- bed ------------------------------------------------------------------------
+      class Bed {
+        constructor(id) {
+          this.id = id;
+          this.vitals = null;       // latest vitals frame
+          this.lastFrameAt = 0;     // wall clock, ms
+          this.firstSeenAt = Date.now();
+          this.hr = new Trend(TREND_S);
+          this.spo2 = new Trend(TREND_S);
+          this.pendingAck = new Set();
+
+          this.node = template.content.firstElementChild.cloneNode(true);
+          this.node.dataset.bed = id;
+          this.node.querySelector('.bed-id').textContent = id;
+          this.hrCanvas = this.node.querySelector('.trend.hr canvas');
+          this.spo2Canvas = this.node.querySelector('.trend.spo2 canvas');
+        }
+
+        ingest(v) {
+          this.vitals = v;
+          this.lastFrameAt = Date.now();
+          const second = Math.floor(v.tServer / 1000);
+          this.hr.put(second, v.hr);
+          this.spo2.put(second, v.spo2);
+        }
+
+        /** 'online' | 'stale' | 'offline' */
+        status(now) {
+          const age = now - this.lastFrameAt;
+          if (age > OFFLINE_MS) return 'offline';
+          if (age > STALE_MS) return 'stale';
+          return 'online';
+        }
+
+        /**
+         * Alarms that should count towards the bed's urgency. An acknowledged alarm is
+         * still active - the patient has not changed - but it has been seen, so it ranks
+         * below one that nobody has looked at yet.
+         */
+        worst(now) {
+          if (this.status(now) === 'offline') return { rank: 3, acked: false };
+          const alarms = this.vitals?.alarms ?? [];
+          let best = { rank: 9, acked: true };
+          for (const a of alarms) {
+            const rank = SEVERITY_RANK[a.severity] ?? 2;
+            const acked = a.acknowledged === true;
+            if (rank < best.rank || (rank === best.rank && !acked && best.acked)) best = { rank, acked };
+          }
+          // Unacknowledged alarms sort ahead of acknowledged ones of the same severity.
+          return best;
+        }
+
+        acknowledge(code) {
+          if (!ws || ws.readyState !== 1) return;
+          this.pendingAck.add(code);
+          ws.send(JSON.stringify({ type: 'acknowledge', deviceId: this.id, code, by: ACK_BY }));
+        }
+
+        render(now) {
+          const status = this.status(now);
+          const v = this.vitals;
+          const fresh = status === 'online';
+          const n = this.node;
+
+          n.classList.toggle('offline', status === 'offline');
+
+          const statusEl = n.querySelector('.bed-status');
+          statusEl.className = `bed-status ${status}`;
+          statusEl.textContent = status === 'online' ? 'LIVE' : status === 'stale' ? 'NO RECENT DATA' : 'OFFLINE';
+
+          const sinceEl = n.querySelector('.since');
+          if (status === 'offline') {
+            sinceEl.textContent = `last seen ${fmtAge(now - this.lastFrameAt)} ago`;
+          } else {
+            sinceEl.textContent = v?.stats?.uptimeS != null ? `up ${fmtAge(v.stats.uptimeS * 1000)}` : '';
+          }
+
+          // Numerics. Anything not current is withdrawn to "--" (D-23).
+          setValue(n.querySelector('.tile.hr'), fresh ? v.hr : null, 0);
+          setValue(n.querySelector('.tile.spo2'), fresh ? v.spo2 : null, 0);
+          setValue(n.querySelector('.tile.temp'), fresh ? v.temp : null, 1);
+          n.querySelector('.tile.hr').classList.toggle('abnormal', fresh && v.hr !== null && v.hrClass !== 'normal');
+          n.querySelector('.tile.hr .sub').textContent = fresh && v.hr !== null ? v.hrClass ?? '' : '';
+          n.querySelector('.tile.spo2 .sub').textContent = spo2Sub(fresh ? v : null);
+          n.querySelector('.tile.temp .sub').textContent = '';
+
+          // Alarm chips. Only current alarms are shown: an offline bed's alarm state is
+          // unknown, and showing its last alarms would claim knowledge nobody has.
+          const alarms = status === 'offline' ? [] : v?.alarms ?? [];
+          this.renderChips(alarms, now);
+
+          // Tile severity outline follows the worst *unacknowledged* alarm.
+          n.classList.remove('high', 'medium');
+          const loud = alarms.find((a) => !a.acknowledged);
+          if (loud && status !== 'offline') n.classList.add(loud.severity);
+
+          const foot = n.querySelector('.bed-foot');
+          foot.querySelector('.f-frames').textContent = `frames ${v?.stats?.framesReceived ?? 0}`;
+          const dropped = v?.stats?.framesDropped ?? 0;
+          const dEl = foot.querySelector('.f-dropped');
+          dEl.textContent = `dropped ${dropped}`;
+          dEl.className = `f-dropped${dropped > 0 ? ' warn' : ''}`;
+          foot.querySelector('.f-quality').textContent = fresh ? `signal ${v.signalQuality}` : '';
+
+          drawTrend(this.hrCanvas, this.hr, now, { min: 30, max: 180, color: cssVar('--ecg'), bands: [60, 100] });
+          drawTrend(this.spo2Canvas, this.spo2, now, { min: 80, max: 100, color: cssVar('--spo2'), bands: [92] });
+        }
+
+        renderChips(alarms, now) {
+          const wrap = this.node.querySelector('.chips');
+          // Rebuild only when the set changes; otherwise just refresh the countdowns, so
+          // a button is not destroyed under the pointer mid-click.
+          const key = alarms.map((a) => `${a.code}:${a.acknowledged ? 1 : 0}`).join('|');
+          if (wrap.dataset.key !== key) {
+            wrap.dataset.key = key;
+            wrap.innerHTML = '';
+            for (const a of alarms) {
+              const chip = document.createElement('div');
+              chip.className = `chip ${a.severity}${a.acknowledged ? ' acked' : ''}`;
+              chip.dataset.code = a.code;
+              chip.innerHTML =
+                `<span>${a.code.replace(/_/g, ' ')}</span>` +
+                `<span class="msg">${escapeHtml(a.message)}</span>` +
+                `<span class="meta"></span>`;
+              if (!a.acknowledged) {
+                const btn = document.createElement('button');
+                btn.textContent = 'ACK';
+                btn.title = 'Silence this alarm. It will sound again if the condition persists.';
+                btn.addEventListener('click', () => {
+                  btn.disabled = true;
+                  btn.textContent = '…';
+                  this.acknowledge(a.code);
+                });
+                chip.appendChild(btn);
+              }
+              wrap.appendChild(chip);
+            }
+          }
+          for (const a of alarms) {
+            const meta = wrap.querySelector(`.chip[data-code="${a.code}"] .meta`);
+            if (!meta) continue;
+            if (a.acknowledged && a.resoundsAt) {
+              const left = Math.max(0, Math.ceil((a.resoundsAt - now) / 1000));
+              meta.textContent = `silenced${a.acknowledgedBy ? ` by ${a.acknowledgedBy}` : ''} · ${left}s`;
+            } else {
+              meta.textContent = `${Math.max(0, Math.round((now - a.since) / 1000))}s`;
+            }
+          }
+        }
+      }
+
+      // --- rendering helpers ------------------------------------------------------
+      const cssVar = (name) => getComputedStyle(document.body).getPropertyValue(name).trim();
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      }
+
+      function fmtAge(ms) {
+        const s = Math.max(0, Math.round(ms / 1000));
+        if (s < 60) return `${s}s`;
+        const m = Math.floor(s / 60);
+        return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+      }
+
+      function setValue(tile, value, digits) {
+        const node = tile.querySelector('.value');
+        const unit = node.querySelector('.unit').outerHTML;
+        if (value === null || value === undefined) {
+          node.classList.add('unknown');
+          node.innerHTML = `--${unit}`;
+        } else {
+          node.classList.remove('unknown');
+          node.innerHTML = `${Number(value).toFixed(digits)}${unit}`;
+        }
+      }
+
+      function spo2Sub(v) {
+        if (!v || v.spo2 === null || v.spo2 === undefined) return '';
+        const parts = [];
+        if (v.spo2Source === 'server') parts.push('red/IR');
+        else if (v.spo2Source === 'device') parts.push('sensor');
+        if (v.pulseBpm !== null && v.pulseBpm !== undefined) parts.push(`pulse ${Math.round(v.pulseBpm)}`);
+        if (v.rateAgreement === 'pulse-deficit') parts.push('pulse deficit');
+        if (v.spo2Quality && v.spo2Quality !== 'good') parts.push(v.spo2Quality);
+        return parts.join(' · ');
+      }
+
+      function drawTrend(canvas, trend, now, { min, max, color, bands }) {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const w = Math.round(rect.width * dpr);
+        const h = Math.round(rect.height * dpr);
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, w, h);
+
+        const pad = 4 * dpr;
+        const yOf = (v) => pad + (1 - (Math.min(max, Math.max(min, v)) - min) / (max - min)) * (h - 2 * pad);
+
+        // Threshold guides at the alarm boundaries, so a trend approaching one is
+        // readable before the alarm fires.
+        ctx.strokeStyle = 'rgba(139, 152, 168, 0.25)';
+        ctx.setLineDash([3 * dpr, 4 * dpr]);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (const b of bands) {
+          const y = Math.round(yOf(b)) + 0.5;
+          ctx.moveTo(0, y);
+          ctx.lineTo(w, y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // The window ends at *now*, not at the last sample: if data stopped arriving
+        // the line stops short of the right edge, and the gap is the message.
+        const endSecond = Math.floor(now / 1000);
+        const startSecond = endSecond - TREND_S + 1;
+        const xOf = (s) => ((s - startSecond) / (TREND_S - 1)) * w;
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5 * dpr;
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        let pen = false;
+        for (let s = startSecond; s <= endSecond; s += 1) {
+          const v = trend.at(s);
+          if (Number.isNaN(v)) { pen = false; continue; } // break the line across gaps
+          const x = xOf(s);
+          const y = yOf(v);
+          if (!pen) { ctx.moveTo(x, y); pen = true; } else { ctx.lineTo(x, y); }
+        }
+        ctx.stroke();
+      }
+
+      // --- ward -----------------------------------------------------------------------
+      function renderWard() {
+        const now = Date.now();
+
+        // Forget beds that have been offline for a long time. Ten minutes, not ten
+        // seconds: a tile vanishing looks like a patient being fine (D-48).
+        for (const [id, bed] of beds) {
+          if (now - bed.lastFrameAt > FORGET_MS) {
+            bed.node.remove();
+            beds.delete(id);
+          }
+        }
+
+        const ordered = [...beds.values()].sort((a, b) => {
+          const wa = a.worst(now);
+          const wb = b.worst(now);
+          return wa.rank - wb.rank || Number(wa.acked) - Number(wb.acked) || a.id.localeCompare(b.id);
+        });
+
+        let alarming = 0;
+        let offline = 0;
+        ordered.forEach((bed, i) => {
+          bed.render(now);
+          const status = bed.status(now);
+          if (status === 'offline') offline += 1;
+          else if ((bed.vitals?.alarms ?? []).some((a) => !a.acknowledged)) alarming += 1;
+          // Reorder in place only when needed, so the DOM is not rebuilt each tick.
+          if (ward.children[i] !== bed.node) ward.insertBefore(bed.node, ward.children[i] ?? null);
+        });
+
+        el('empty').style.display = beds.size ? 'none' : '';
+        el('n-beds').textContent = beds.size;
+        el('n-alarming').textContent = alarming;
+        el('n-offline').textContent = offline;
+        el('clock').textContent = new Date(now).toLocaleTimeString();
+      }
+
+      // --- connection ---------------------------------------------------------------
+      function connect() {
+        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+        ws = new WebSocket(`${proto}://${location.host}/stream`);
+
+        ws.onopen = () => {
+          el('conn').textContent = 'live';
+          el('conn').className = 'pill live';
+        };
+
+        ws.onmessage = (ev) => {
+          const m = JSON.parse(ev.data);
+          if (m.type === 'hello') {
+            // Beds the server already knows about appear immediately, even before their
+            // first frame reaches this page.
+            for (const id of m.devices ?? []) if (!beds.has(id)) addBed(id);
+            return;
+          }
+          if (m.type === 'acknowledged') {
+            const bed = beds.get(m.deviceId);
+            if (bed) {
+              bed.pendingAck.delete(m.code);
+              if (!m.ok) {
+                // Re-enable the button: the server refused (the alarm had already
+                // cleared, most likely), and the chip will disappear on the next frame.
+                const btn = bed.node.querySelector(`.chip[data-code="${m.code}"] button`);
+                if (btn) { btn.disabled = false; btn.textContent = 'ACK'; }
+              }
+            }
+            return;
+          }
+          if (m.type !== 'vitals') return;
+          const bed = beds.get(m.deviceId) ?? addBed(m.deviceId);
+          bed.ingest(m);
+        };
+
+        const down = () => {
+          // Losing the server clears nothing: a dropped WebSocket is not evidence about
+          // any patient. Beds keep their last state and age into "offline" on their own.
+          el('conn').textContent = 'disconnected';
+          el('conn').className = 'pill down';
+          setTimeout(connect, 2000);
+        };
+        ws.onclose = down;
+        ws.onerror = () => ws.close();
+      }
+
+      function addBed(id) {
+        const bed = new Bed(id);
+        beds.set(id, bed);
+        ward.appendChild(bed.node);
+        return bed;
+      }
+
+      setInterval(renderWard, 500);
+      window.addEventListener('resize', renderWard);
+      renderWard();
+      connect();
+    </script>
+  </body>
+</html>

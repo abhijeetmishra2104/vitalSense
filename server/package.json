@@ -1,0 +1,22 @@
+{
+  "name": "vitalsense-server",
+  "version": "0.1.0",
+  "description": "VitalSense ingest server: WebSocket acquisition, streaming DSP, alarm engine",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test --test-timeout=30000 \"test/**/*.test.js\"",
+    "validate:streaming": "node tools/validateStreaming.js",
+    "validate:frames": "node ../firmware/test/validate_frames.mjs",
+    "validate:ppg": "node tools/validatePpg.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pg": "^8.23.0",
+    "ws": "^8.18.0"
+  },
+  "license": "MIT"
+}
