@@ -8,7 +8,7 @@ and the evidence that decides its status, and that status is *computed* from the
 rather than asserted here: a requirement whose evidence has never been produced says so,
 and one whose evidence says it failed cannot be rendered as passing.
 
-Evidence: MIT-BIH validation 2026-08-19 10:49 UTC · scenario matrix 2026-08-19 10:52 UTC.
+Evidence: MIT-BIH validation 2026-08-19 12:19 UTC · scenario matrix 2026-08-19 12:24 UTC.
 
 Regenerate with:
 
@@ -34,7 +34,7 @@ The needs the system exists to serve, before any engineering:
 | ID | Requirement | Serves | Design element | Verification | Status |
 |---|---|---|---|---|---|
 | SR-01 | Heart rate accurate to within ±5 bpm of reference | UN-1, UN-3 | Pan-Tompkins detection + median-of-instantaneous-rate (`dsp/vitals.py`, D-09) | Automated: `dsp/validate.py` against MIT-BIH cardiologist annotations | **verified** — worst 2.18 bpm, mean 0.34 bpm over 22,459 beats |
-| SR-02 | End-to-end latency, electrode to dashboard, under 500 ms | UN-1 | WebSocket streaming with no batching; trailing-window streaming DSP | Fault-injection scenario: sample emitted by the device to vitals frame at a dashboard | **verified** — median 0.5 ms, p95 2.1 ms, worst 7.5 ms |
+| SR-02 | End-to-end latency, electrode to dashboard, under 500 ms | UN-1 | WebSocket streaming with no batching; trailing-window streaming DSP | Fault-injection scenario: sample emitted by the device to vitals frame at a dashboard | **verified** — median 1.4 ms, p95 2.5 ms, worst 13.7 ms |
 | SR-03 | Leads-off condition alarms within 2 s | UN-2, UN-3 | AD8232 LO± pins plus a rail cross-check → frame flag → alarm engine (D-28, D-18) | Fault-injection scenario: detach the electrode, time the alarm | **verified** — 1.51 s |
 | SR-04 | QRS detection sensitivity > 99 % on clean records | UN-1, UN-3 | 5–15 Hz detection band, adaptive dual threshold, search-back, T-wave discrimination (D-07) | Automated: `dsp/validate.py`, ±150 ms match window per ANSI/AAMI EC57 | **verified** — 99.98 % over records 100, 101, 103, 115 |
 | SR-05 | No data loss across a network outage of up to 30 s | UN-4 | Device-side ring buffer with backfill on reconnect (`firmware/src/vs_ringbuf.c`, D-27) | Fault-injection scenario: disconnect for 30 s, verify frame count and `seq` continuity | **verified** — 787/787 frames delivered, 0 gaps in seq |

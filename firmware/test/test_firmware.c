@@ -20,6 +20,12 @@
 #include "vs_ringbuf.h"
 #include "notch_coeffs.h"
 
+/* -std=c99 is strict ISO C, under which glibc does not expose M_PI from <math.h>.
+ * macOS libc does, which is why this only ever broke on the Linux CI runner. */
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 static int total = 0;
 static int passed = 0;
 
